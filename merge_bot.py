@@ -1,118 +1,80 @@
 import os, telebot, subprocess, threading, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# --- الإعدادات ---
 TOKEN = '7867778362:AAHtvj9wOAHpG9BPcGPEqNIkT2O5DLXtIPI'
 ADMIN_ID = 5747051433
 bot = telebot.TeleBot(TOKEN)
 
-# خادم وهمي لإبقاء السيرفر حياً
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Merge Bot is Active and Listening...")
+        self.wfile.write(b"Merge Server Active")
 
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    HTTPServer(('0.0.0.0', port), SimpleHandler).serve_forever()
-
-# --- نظام إدارة الـ 5 مقاطع الأخيرة ---
 def manage_storage():
-    # جلب الملفات التي أسماؤها أرقام (ID)
+    # الاحتفاظ بآخر 5 مقاطع فقط
     files = [f for f in os.listdir('.') if f.endswith('.mp4') and f[:-4].isdigit()]
-    # ترتيب حسب وقت الإنشاء (الأقدم أولاً)
-    files.sort(key=lambda x: os.path.getctime(x))
-    
+    files.sort(key=os.path.getctime)
     while len(files) > 5:
-        oldest = files.pop(0)
-        try:
-            os.remove(oldest)
-            print(f"🗑️ Deleted oldest file: {oldest}")
+        try: os.remove(files.pop(0))
         except: pass
 
-# --- استقبال الفيديوهات (منك أو التي يرسلها البوت لنفسه) ---
-@bot.message_handler(content_types=['video'])
-def handle_video(message):
+@bot.message_handler(content_types=['document', 'video'])
+def handle_files(message):
     caption = message.caption or ""
-    # نبحث عن كلمة ID: في الوصف
     if "ID:" in caption:
         try:
-            # استخراج الرقم من الكابشن
             file_id_no = caption.split("ID:")[1].strip()
+            # جلب المعرف سواء أرسل كفيديو أو مستند
+            file_id = message.document.file_id if message.content_type == 'document' else message.video.file_id
             
-            # تحميل الملف من تليجرام
-            file_info = bot.get_file(message.video.file_id)
+            file_info = bot.get_file(file_id)
             downloaded = bot.download_file(file_info.file_path)
             
-            # حفظ الملف باسم الرقم (مثلاً 1.mp4)
             file_name = f"{file_id_no}.mp4"
             with open(file_name, "wb") as f:
                 f.write(downloaded)
             
-            # إرسال تأكيد لك (حتى تطمئن أن الملف صار بالسيرفر)
-            bot.send_message(ADMIN_ID, f"✅ تم حفظ المقطع {file_id_no} في الذاكرة.")
-            
-            # إدارة المساحة (حذف الأقدم إذا تجاوزوا 5)
+            # إرسال إشعار تأكيد لك (مهم جداً)
+            bot.send_message(ADMIN_ID, f"📥 تم حفظ المقطع {file_id_no} في الذاكرة.")
             manage_storage()
         except Exception as e:
-            print(f"Error saving: {e}")
+            print(f"Error: {e}")
 
-# --- أمر الدمج: مثال /merge 1 2 3 ---
 @bot.message_handler(commands=['merge'])
 def merge_action(message):
     if message.from_user.id != ADMIN_ID: return
-    
     ids = message.text.split()[1:]
-    if len(ids) < 2:
-        bot.reply_to(message, "⚠️ يرجى كتابة الأرقام، مثال: /merge 1 2")
-        return
-
-    # التأكد من وجود الملفات المطلوبة
-    valid_files = []
-    missing_files = []
-    for i in ids:
-        if os.path.exists(f"{i}.mp4"):
-            valid_files.append(f"{i}.mp4")
-        else:
-            missing_files.append(i)
-
-    if missing_files:
-        bot.reply_to(message, f"❌ المقاطع التالية غير موجودة: {', '.join(missing_files)}\n(ربما تم حذفها لأنها قديمة)")
-        return
-
-    bot.send_message(ADMIN_ID, f"⚙️ جاري دمج {len(valid_files)} مقاطع...")
-
-    # إنشاء قائمة الدمج لـ FFmpeg
-    with open('list.txt', 'w') as f:
-        for vid in valid_files:
-            f.write(f"file '{vid}'\n")
-
-    output = f"result_{int(time.time())}.mp4"
     
-    try:
-        # عملية الدمج السريع
-        subprocess.run(['ffmpeg', '-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', '-y', output], check=True)
-        
-        if os.path.exists(output):
-            with open(output, 'rb') as v:
-                bot.send_video(ADMIN_ID, v, caption="✅ إليك المقطع المدمج!")
-            
-            # تنظيف ملفات الدمج
-            os.remove(output)
-            os.remove('list.txt')
-            # اختياري: إذا أردت حذف الأصول بعد الدمج فوراً
-            for f in valid_files:
-                try: os.remove(f)
-                except: pass
-        else:
-            bot.reply_to(message, "❌ فشل دمج الملفات.")
-    except Exception as e:
-        bot.reply_to(message, f"❌ خطأ تقني: {e}")
+    # التحقق من وجود الملفات فعلياً في السيرفر
+    available = [f[:-4] for f in os.listdir('.') if f.endswith('.mp4')]
+    missing = [i for i in ids if i not in available]
+
+    if missing:
+        bot.reply_to(message, f"❌ المقاطع {','.join(missing)} غير موجودة.\nالمتوفر حالياً: {','.join(available)}")
+        return
+
+    msg = bot.send_message(ADMIN_ID, "⚙️ جاري دمج المقاطع...")
+    
+    with open('list.txt', 'w') as f:
+        for i in ids: f.write(f"file '{i}.mp4'\n")
+
+    output = f"final_{int(time.time())}.mp4"
+    subprocess.run(['ffmpeg', '-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', '-y', output])
+    
+    if os.path.exists(output):
+        with open(output, 'rb') as v:
+            bot.send_video(ADMIN_ID, v, caption="✅ تم الدمج بنجاح!")
+        os.remove(output)
+        os.remove('list.txt')
+        # حذف المقاطع المدمجة لتوفير مساحة
+        for i in ids: 
+            try: os.remove(f"{i}.mp4")
+            except: pass
+    else:
+        bot.reply_to(message, "❌ فشل دمج الفيديو.")
 
 if __name__ == "__main__":
-    # تشغيل السيرفر في خيط منفصل
-    threading.Thread(target=run_server, daemon=True).start()
-    print("🚀 Merge Bot is Starting...")
-    # ملاحظة: allowed_updates تجعل البوت يرى كل أنواع الرسائل
-    bot.polling(non_stop=True, allowed_updates=["message", "edited_message", "channel_post"])
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=lambda: HTTPServer(('0.0.0.0', port), SimpleHandler).serve_forever(), daemon=True).start()
+    bot.polling(non_stop=True)
