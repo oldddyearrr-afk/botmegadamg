@@ -2,7 +2,7 @@ import os, telebot, subprocess, threading, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # --- الإعدادات ---
-TOKEN = '7867778362:AAHtvj9wOAHpG9BPcGPEqNIkT2O5DLXtIPI'
+TOKEN = '7867778362:AAF0z3aqfWYwxWzclwG1x5SSWw0Fb5tmT6g'
 ADMIN_ID = 5747051433
 bot = telebot.TeleBot(TOKEN)
 
