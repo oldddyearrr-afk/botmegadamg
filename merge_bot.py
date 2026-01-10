@@ -5,68 +5,86 @@ TOKEN = '8237586935:AAFCfvGqx5KWuXGwyyECS_flh-V4fulCUGg'
 ADMIN_ID = 5747051433
 bot = telebot.TeleBot(TOKEN)
 
+# قاموس لتخزين بيانات المستخدم مؤقتاً
+user_data = {}
+
 app = Flask(__name__)
 @app.route('/')
-def health(): return "Merge Bot Online", 200
+def health(): return "Merge Bot is Live", 200
 
-@bot.message_handler(func=lambda m: m.caption and "SAVE:" in m.caption, content_types=['document'])
-def catch_save(m):
-    try:
-        fid = m.caption.split(":")[1]
-        finfo = bot.get_file(m.document.file_id)
-        downloaded = bot.download_file(finfo.file_path)
-        with open(f"{fid}.mp4", "wb") as f: f.write(downloaded)
-        bot.send_message(ADMIN_ID, f"✅ تم استلام المقطع {fid} وحفظه.")
-        # تنظيف تلقائي
-        vids = sorted([f for f in os.listdir('.') if f.endswith('.mp4') and f[:-4].isdigit()], key=os.path.getctime)
-        while len(vids) > 10: os.remove(vids.pop(0))
-    except Exception as e:
-        bot.send_message(ADMIN_ID, f"❌ خطأ أثناء الحفظ: {e}")
-
+# أمر البدء
 @bot.message_handler(commands=['merge'])
-def merge(m):
-    if m.chat.id != ADMIN_ID: return
-    
-    ids = m.text.split()[1:]
-    if not ids:
-        bot.reply_to(m, "⚠️ يرجى كتابة الأرقام، مثال:\n/merge 1 2")
-        return
+def start_merge(message):
+    if message.chat.id != ADMIN_ID: return
+    user_data[message.chat.id] = {'count': 0, 'files': [], 'step': 'waiting_count'}
+    bot.reply_to(message, "🔢 كم عدد المقاطع التي تريد دمجها؟ (أرسل الرقم فقط)")
 
-    bot.reply_to(m, f"⚙️ جاري محاولة دمج {len(ids)} مقاطع...")
-    
-    available_files = []
-    for i in ids:
-        file_path = f"{i}.mp4"
-        if os.path.exists(file_path):
-            available_files.append(file_path)
-        else:
-            bot.send_message(ADMIN_ID, f"❓ المقطع {i} غير موجود في السيرفر.")
+# استقبال عدد المقاطع
+@bot.message_handler(func=lambda m: user_data.get(m.chat.id, {}).get('step') == 'waiting_count')
+def get_count(message):
+    if message.text.isdigit():
+        count = int(message.text)
+        if count < 2:
+            bot.reply_to(message, "⚠️ يجب دمج مقطعين على الأقل. كم العدد؟")
+            return
+        user_data[message.chat.id]['count'] = count
+        user_data[message.chat.id]['step'] = 'waiting_files'
+        bot.reply_to(message, f"✅ ممتاز، أرسل المقطع الأول الآن (رقم 1 من {count})")
+    else:
+        bot.reply_to(message, "❌ يرجى إرسال رقم صحيح.")
 
-    if len(available_files) < 2:
-        bot.send_message(ADMIN_ID, "❌ لا يمكن الدمج، أحتاج لمقطعين على الأقل موجودين بالسيرفر.")
-        return
-
-    with open('list.txt', 'w') as f:
-        for f_path in available_files:
-            f.write(f"file '{f_path}'\n")
+# استقبال الفيديوهات
+@bot.message_handler(content_types=['video', 'document'], func=lambda m: user_data.get(m.chat.id, {}).get('step') == 'waiting_files')
+def get_files(message):
+    data = user_data[message.chat.id]
+    current_files = data['files']
     
-    out = f"final_video_{int(time.time())}.mp4"
-    try:
-        # تنفيذ FFmpeg مع التقاط الخطأ إن وجد
-        result = subprocess.run(['ffmpeg', '-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', '-y', out], capture_output=True, text=True)
-        
-        if os.path.exists(out) and os.path.getsize(out) > 0:
-            with open(out, 'rb') as v:
-                bot.send_video(ADMIN_ID, v, caption="✅ تم الدمج بنجاح!")
-            os.remove(out)
-            # مسح الملفات المدمجة فقط
-            for f_path in available_files: os.remove(f_path)
-        else:
-            bot.send_message(ADMIN_ID, f"❌ فشل FFmpeg في إنتاج الفيديو:\n{result.stderr[:100]}")
-    except Exception as e:
-        bot.send_message(ADMIN_ID, f"❌ خطأ برمي: {e}")
-    finally:
-        if os.path.exists('list.txt'): os.remove('list.txt')
+    # تحميل الملف
+    bot.send_message(ADMIN_ID, f"📥 جاري تحميل المقطع رقم {len(current_files) + 1}...")
+    
+    file_id = message.video.file_id if message.content_type == 'video' else message.document.file_id
+    file_info = bot.get_file(file_id)
+    downloaded_file = bot.download_file(file_info.file_path)
+    
+    file_path = f"file_{len(current_files)}.mp4"
+    with open(file_path, 'wb') as new_file:
+        new_file.write(downloaded_file)
+    
+    current_files.append(file_path)
+    
+    # التحقق هل انتهينا من جمع كل الملفات؟
+    if len(current_files) < data['count']:
+        bot.reply_to(message, f"👍 تم استلامه. أرسل المقطع رقم {len(current_files) + 1} الآن.")
+    else:
+        bot.reply_to(message, "🚀 اكتملت المقاطع! جاري البدء في الدمج الفوري بنفس الجودة...")
+        user_data[message.chat.id]['step'] = 'merging'
+        threading.Thread(target=process_merge, args=(message.chat.id,)).start()
+
+# دالة معالجة الدمج بـ FFmpeg
+def process_merge(chat_id):
+    files = user_data[chat_id]['files']
+    list_path = f"list_{chat_id}.txt"
+    output_path = f"final_{chat_id}_{int(time.time())}.mp4"
+    
+    with open(list_path, 'w') as f:
+        for file in files:
+            f.write(f"file '{file}'\n")
+    
+    # دمج بدون إعادة ترميز (نفس الدقة والسرعة)
+    cmd = ['ffmpeg', '-f', 'concat', '-safe', '0', '-i', list_path, '-c', 'copy', '-y', output_path]
+    subprocess.run(cmd)
+    
+    if os.path.exists(output_path):
+        with open(output_path, 'rb') as final_v:
+            bot.send_video(chat_id, final_v, caption="✅ تم الدمج بنجاح!")
+    else:
+        bot.send_message(chat_id, "❌ حدث خطأ أثناء الدمج.")
+    
+    # تنظيف الملفات
+    for f in files: os.remove(f)
+    if os.path.exists(list_path): os.remove(list_path)
+    if os.path.exists(output_path): os.remove(output_path)
+    del user_data[chat_id]
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))), daemon=True).start()
