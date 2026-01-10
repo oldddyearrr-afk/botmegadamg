@@ -7,35 +7,34 @@ bot = telebot.TeleBot(TOKEN)
 
 app = Flask(__name__)
 @app.route('/')
-def health(): return "Merge Bot Active", 200
+def health(): return "OK", 200
 
 @bot.message_handler(func=lambda m: m.caption and "SAVE:" in m.caption, content_types=['document'])
-def catch_save(message):
+def catch_save(m):
     try:
-        fid = message.caption.split(":")[1]
-        finfo = bot.get_file(message.document.file_id)
+        fid = m.caption.split(":")[1]
+        finfo = bot.get_file(m.document.file_id)
         downloaded = bot.download_file(finfo.file_path)
         with open(f"{fid}.mp4", "wb") as f: f.write(downloaded)
         bot.send_message(ADMIN_ID, f"✅ جاهز {fid}")
-        # حذف قديم (آخر 5)
         vids = sorted([f for f in os.listdir('.') if f.endswith('.mp4') and f[:-4].isdigit()], key=os.path.getctime)
         while len(vids) > 5: os.remove(vids.pop(0))
-        bot.delete_message(ADMIN_ID, message.message_id)
+        bot.delete_message(ADMIN_ID, m.message_id)
     except: pass
 
 @bot.message_handler(commands=['merge'])
-def merge(message):
-    ids = message.text.split()[1:]
+def merge(m):
+    ids = m.text.split()[1:]
     with open('list.txt', 'w') as f:
         for i in ids:
             if os.path.exists(f"{i}.mp4"): f.write(f"file '{i}.mp4'\n")
     
-    output = f"out_{int(time.time())}.mp4"
-    subprocess.run(['ffmpeg', '-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', '-y', output])
+    out = f"out_{int(time.time())}.mp4"
+    subprocess.run(['ffmpeg', '-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', '-y', out])
     
-    if os.path.exists(output):
-        with open(output, 'rb') as v: bot.send_video(ADMIN_ID, v)
-        os.remove(output)
+    if os.path.exists(out):
+        with open(out, 'rb') as v: bot.send_video(ADMIN_ID, v)
+        os.remove(out)
         for i in ids: 
             try: os.remove(f"{i}.mp4")
             except: pass
